@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition Attendance System</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Custom styles */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            margin-top: 20px;
+        }
+        .box {
+            padding: 20px;
+            border-radius: 10px;
+            background-color: #f9f9f9;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .form-group input[type="text"],
+        .form-group input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .button {
+            display: inline-block;
+            width: 100%;
+            padding: 10px;
+            background-color: #007bff;
+            color: #fff;
+            text-align: center;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #0056b3;
+        }
+        #video-feed-container {
+            display: none;
+            text-align: center;
+        }
+        #video-feed {
+            width: 100%;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        footer {
+            position: absolute;
+            bottom: 10px;
+            text-align: center;
+            width: 100%;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="row">
+            <div class="col-md-6 mb-4" id="capture-container">
+                <div class="box">
+                    <h1>Mark Attendance</h1>
+                    <div id="video-feed-container">
+                        <img id="video-feed" src="" alt="Video Feed">
+                    </div>
+                    <button class="button" id="startBtn">Capture</button>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="box">
+                    <h1>Register User</h1>
+                    <form id="register-form" method="POST" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <label for="id">ID</label>
+                            <input type="text" id="id" name="id" placeholder="Enter your ID" autocomplete="off" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="name">Name</label>
+                            <input type="text" id="name" name="name" placeholder="Enter your name" autocomplete="off" pattern="^[a-zA-Z\s\-]+$" title="Name can only contain letters, spaces, and hyphens." required>
+                        </div>
+                        <div class="form-group">
+                            <label for="photo">Photo</label>
+                            <input type="file" id="photo" name="photo" accept="image/*" required>
+                        </div>
+                        <button type="submit" class="button">Register</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    
+    <script>
+        let polling = false;
+        let pollingInterval;
+        let videoFeedStarted = false;
+
+        // Function to clear previous response messages
+        function clearPreviousAlerts() {
+            fetch('/clear_response_message', { method: 'POST' }) // Clear messages in the backend
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Previous alerts cleared:', data);
+                })
+                .catch(error => console.error('Error clearing alerts:', error));
+        }
+
+        // Call clearPreviousAlerts when the "Capture" button is clicked
+        document.getElementById('startBtn').addEventListener('click', function() {
+            clearPreviousAlerts();  // Clear previous alerts before starting a new session
+            resetCameraState();      // Clear previous camera data
+            const videoFeed = document.getElementById('video-feed');
+
+            if (!videoFeedStarted) {
+                videoFeed.src = '/video_feed';  // Start the video feed immediately
+                videoFeedStarted = true;        // Set flag to indicate video has started
+            } else {
+                videoFeed.src = '/video_feed?' + new Date().getTime();  // Prevent cached frame
+            }
+
+            document.getElementById('video-feed-container').style.display = 'block';
+
+            // Fetch camera start status
+            fetch('/start_camera', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'camera_started') {
+                        console.log('Camera started.');
+                        startPolling();
+                    }
+                });
+        });
+
+        // Register new user
+        document.getElementById('register-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const formData = new FormData(this);
+            fetch('/register-user', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert(data.message);
+                if (data.message === 'Registration successful' || data.message === 'Already registered') {
+                    document.getElementById('register-form').reset();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        });
+
+        function checkForAlerts() {
+            fetch('/response_message')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.message) {
+                        alert(data.message);
+                        stopVideoFeed();
+                        resetCameraState();
+                        location.reload(true);
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Start polling for responses
+        function startPolling() {
+            polling = true;
+            pollingInterval = setInterval(() => {
+                if (polling) {
+                    checkForAlerts();
+                }
+            }, 1000); // Poll every second
+        }
+
+        // Stop polling
+        function stopPolling() {
+            clearInterval(pollingInterval);
+            polling = false;
+        }
+
+        // Stop the video feed and reset the state
+        function stopVideoFeed() {
+            document.getElementById('video-feed-container').style.display = 'none';
+            const videoFeed = document.getElementById('video-feed');
+            videoFeed.src = ''; // Stop the video feed
+            videoFeedStarted = false;  // Reset the flag so video can be restarted fresh
+            stopPolling();
+        }
+
+        // Reset camera and data for a new session
+        function resetCameraState() {
+            stopVideoFeed();  // Stop any ongoing video feed
+            fetch('/reset_feed', { method: 'POST' })  // Reset camera feed in the backend
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Camera reset:', data);
+                })
+                .catch(error => console.error('Error resetting camera:', error));
+        }
+
+        // Reset the state before the page unloads
+        window.addEventListener('beforeunload', () => {
+            resetCameraState();
+        });
+    </script>
+
+</body>
+</html>
